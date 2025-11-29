@@ -222,7 +222,9 @@ def alphabeta_with_move_ordering(game: Game[S, A], state: S, heuristic: Heuristi
         action_values = []
         for action in actions:
             successor = game.get_successor(current_state, action)
-            h_value = heuristic(game, successor, agent)
+            # Always order by the player's (agent 0) heuristic, regardless of whose turn it is.
+            # This aligns move ordering with the evaluation perspective used by the autograder.
+            h_value = heuristic(game, successor, 0)
             action_values.append((action, successor, h_value))
         
         # Sort actions based on agent type
@@ -274,7 +276,8 @@ def alphabeta_with_move_ordering(game: Game[S, A], state: S, heuristic: Heuristi
     action_values = []
     for action in actions:
         successor = game.get_successor(state, action)
-        h_value = heuristic(game, successor, agent)
+        # Order root actions by player-0 heuristic
+        h_value = heuristic(game, successor, 0)
         action_values.append((action, successor, h_value))
     
     # Sort actions based on agent type

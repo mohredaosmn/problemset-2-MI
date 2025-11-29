@@ -88,111 +88,89 @@ class CryptArithmeticProblem(Problem):
         # C0 is always 0 (no initial carry)
         problem.constraints.append(UnaryConstraint('C0', lambda x: x == 0))
         
-        # Cn (final carry) must be 0 (no overflow)
-        final_carry = f'C{n}'
-        problem.constraints.append(UnaryConstraint(final_carry, lambda x: x == 0))
+    # Do NOT force the final carry to 0.
+    # If RHS has an extra leading digit (len(RHS) == max(len(LHS0), len(LHS1)) + 1),
+    # then the final carry must be 1 and will equal that leading digit via the column constraint below.
+    # Otherwise, the final carry will end up 0 naturally from the same constraint.
         
-        # For each digit position, add constraints
-        # Column equation: digit0 + digit1 + carry_in = digit_result + 10 * carry_out
+        # For each digit position, add constraints using only unary/binary by encoding pairs
+        # Column equation: (x or 0) + (y or 0) + carry_in = result_digit + 10 * carry_out
         for i in range(n):
             pos_from_right = i
-            
-            # Get the letter at this position (or None if out of range)
+
+            # Indices into each word (right-aligned)
             l0_idx = len(LHS0) - 1 - pos_from_right
             l1_idx = len(LHS1) - 1 - pos_from_right
             lr_idx = len(RHS) - 1 - pos_from_right
-            
-            l0 = LHS0[l0_idx] if 0 <= l0_idx < len(LHS0) else None
-            l1 = LHS1[l1_idx] if 0 <= l1_idx < len(LHS1) else None
-            lr = RHS[lr_idx]  # RHS always has a digit at this position
-            
-            carry_in = f'C{pos_from_right}'
-            carry_out = f'C{pos_from_right + 1}'
-            
-            # We need: (l0 or 0) + (l1 or 0) + carry_in = lr + 10 * carry_out
-            # Since we can only use binary constraints, we create auxiliary variables
-            
-            # Add auxiliary variable for left side: sum_left = (l0 or 0) + (l1 or 0) + carry_in
-            sum_var = f'SUM{pos_from_right}'
-            problem.variables.append(sum_var)
-            problem.domains[sum_var] = set(range(20))  # max 9+9+1=19
-            
-            # Now we need to link sum_var with the actual sum
-            # We'll create binary constraints between sum_var and each input
-            
-            # If l0 exists, add constraint: sum_var - l0 must be achievable with l1 + carry_in
-            if l0:
-                # For each pair (l0_val, sum_val), check if sum_val - l0_val can be made by l1 + carry_in
-                def make_l0_constraint(l0_letter=l0, l1_letter=l1):
-                    def check(v0, vsum):
-                        remainder = vsum - v0
-                        if remainder < 0 or remainder > 19:
-                            return False
-                        # Check if remainder can be formed by (l1 or 0) + carry_in
-                        for vci in [0, 1]:
-                            if l1_letter:
-                                # Need to check if any l1 value works
-                                for v1 in range(10):
-                                    if v1 + vci == remainder:
-                                        return True
-                            else:
-                                # l1 is 0
-                                if vci == remainder:
-                                    return True
-                        return False
-                    return check
-                problem.constraints.append(BinaryConstraint((l0, sum_var), make_l0_constraint()))
-            
-            # If l1 exists, add similar constraint
-            if l1:
-                def make_l1_constraint(l0_letter=l0, l1_letter=l1):
-                    def check(v1, vsum):
-                        remainder = vsum - v1
-                        if remainder < 0 or remainder > 19:
-                            return False
-                        for vci in [0, 1]:
-                            if l0_letter:
-                                for v0 in range(10):
-                                    if v0 + vci == remainder:
-                                        return True
-                            else:
-                                if vci == remainder:
-                                    return True
-                        return False
-                    return check
-                problem.constraints.append(BinaryConstraint((l1, sum_var), make_l1_constraint()))
-            
-            # Add constraint for carry_in
-            def make_ci_constraint(l0_letter=l0, l1_letter=l1):
-                def check(vci, vsum):
-                    remainder = vsum - vci
-                    if remainder < 0 or remainder > 18:
-                        return False
-                    # Check if remainder can be formed by (l0 or 0) + (l1 or 0)
-                    for v0 in ([0] if not l0_letter else range(10)):
-                        for v1 in ([0] if not l1_letter else range(10)):
-                            if v0 + v1 == remainder:
-                                return True
-                    return False
-                return check
-            problem.constraints.append(BinaryConstraint((carry_in, sum_var), make_ci_constraint()))
-            
-            # Now link sum_var to lr and carry_out: sum_var = lr + 10 * carry_out
-            
-            # Constraint between lr and sum_var
-            def check_lr_sum(vlr, vsum):
-                # Check if there's a carry_out value (0 or 1) such that vlr + 10*carry_out = vsum
-                return (vsum == vlr) or (vsum == vlr + 10)
-            problem.constraints.append(BinaryConstraint((lr, sum_var), check_lr_sum))
-            
-            # Constraint between carry_out and sum_var
-            def check_co_sum(vco, vsum):
-                # Check if there's an lr value (0-9) such that lr + 10*vco = vsum
-                for vlr in range(10):
-                    if vlr + 10 * vco == vsum:
-                        return True
-                return False
-            problem.constraints.append(BinaryConstraint((carry_out, sum_var), check_co_sum))
+
+            x = LHS0[l0_idx] if 0 <= l0_idx < len(LHS0) else None
+            y = LHS1[l1_idx] if 0 <= l1_idx < len(LHS1) else None
+            r = RHS[lr_idx]
+
+            ci = f'C{pos_from_right}'
+            co = f'C{pos_from_right + 1}'
+
+            # Auxiliary variable PAIR_i encodes (x, y) as 10*x + y. Missing letters treated as 0.
+            pair = f'PAIR{i}'
+            problem.variables.append(pair)
+            # Tight pair domain based on current letter domains (or 0 if missing)
+            xd = problem.domains[x] if x else {0}
+            yd = problem.domains[y] if y else {0}
+            problem.domains[pair] = {10*vx + vy for vx in xd for vy in yd}
+
+            # Link x to PAIR_i (tens digit) when x exists
+            if x:
+                def check_x_pair(vx, vp):
+                    return (vp // 10) == vx
+                problem.constraints.append(BinaryConstraint((x, pair), check_x_pair))
+
+            # Link y to PAIR_i (ones digit) when y exists
+            if y:
+                def check_y_pair(vy, vp):
+                    return (vp % 10) == vy
+                problem.constraints.append(BinaryConstraint((y, pair), check_y_pair))
+
+            # Auxiliary PSUM_i = (x or 0) + (y or 0)
+            psum = f'PSUM{i}'
+            problem.variables.append(psum)
+            # Tight psum domain based on xd, yd
+            psum_domain = {vx + vy for vx in xd for vy in yd}
+            problem.domains[psum] = psum_domain
+
+            def check_pair_psum(vp, vs):
+                return ((vp // 10) + (vp % 10)) == vs
+            problem.constraints.append(BinaryConstraint((pair, psum), check_pair_psum))
+
+            # Combine PSUM and carry_in into COMB_i = 20*ci + psum
+            comb = f'COMB{i}'
+            problem.variables.append(comb)
+            comb_domain = {20*ci_val + s for ci_val in {0,1} for s in psum_domain}
+            problem.domains[comb] = comb_domain
+
+            def check_ci_comb(vci, vc):
+                return (vc // 20) == vci
+            def check_psum_comb(vs, vc):
+                return (vc % 20) == vs
+            problem.constraints.append(BinaryConstraint((ci, comb), check_ci_comb))
+            problem.constraints.append(BinaryConstraint((psum, comb), check_psum_comb))
+
+            # SUM_i = psum + ci = (comb % 20) + (comb // 20)
+            sum_i = f'SUM{i}'
+            problem.variables.append(sum_i)
+            sum_domain = {s + ci_val for ci_val in {0,1} for s in psum_domain}
+            problem.domains[sum_i] = sum_domain
+
+            def check_comb_sum(vc, vs):
+                return ((vc % 20) + (vc // 20)) == vs
+            problem.constraints.append(BinaryConstraint((comb, sum_i), check_comb_sum))
+
+            # Link SUM to result digit and next carry: r == SUM % 10, co == SUM // 10
+            def check_r_sum(vr, vs):
+                return (vs % 10) == vr
+            def check_co_sum(vco, vs):
+                return (vs // 10) == vco
+            problem.constraints.append(BinaryConstraint((r, sum_i), check_r_sum))
+            problem.constraints.append(BinaryConstraint((co, sum_i), check_co_sum))
         
         return problem
 
